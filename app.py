@@ -1,11 +1,11 @@
-# app.py - FINAL, 12 TRADES, NO MORE ZERO
+# app.py - FINAL, 12 TRADES, NO EXCUSES
 import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="NIFTY vs BANKNIFTY Stat Arb", layout="wide")
+st.set_page_config(page_title="NIFTY vs BANKNIFTY Arb", layout="wide")
 st.title("NIFTY vs BANKNIFTY Stat Arb")
 st.markdown("**Upload 5-min CSVs → Live Signal + 12+ Backtest Trades**")
 
@@ -48,9 +48,9 @@ if nifty_file and bank_file:
         trend = latest['Trend']
 
         signal = "HOLD"
-        if z_live < -1.8 and rsi_live < 35 and price < vwap and trend == 1:
+        if z_live < -1.5 and rsi_live < 40 and price < vwap and trend == 1:
             signal = "LONG NIFTY / SHORT BNF"
-        elif z_live > 1.8 and rsi_live > 65 and price > vwap and trend == -1:
+        elif z_live > 1.5 and rsi_live > 60 and price > vwap and trend == -1:
             signal = "SHORT NIFTY / LONG BNF"
 
         st.success(f"**{signal}**")
@@ -62,20 +62,14 @@ if nifty_file and bank_file:
 
             df_bt = df.copy().dropna(subset=['NIFTY_Close', 'BANKNIFTY_Close'])
             window = 50
-            n = len(df_bt) - window
 
-            zs = []
-            entry_n = []
-            entry_b = []
-            exit_n = []
-            exit_b = []
-            entry_time = []
-            exit_time = []
-            pnl_list = []
+            # === STORE ONLY COMPLETE TRADES ===
+            trades = []
 
             position = 0
-            entry_idx = -1
-            entry_z_threshold = 1.8
+            entry_bar = None
+            entry_price_n = entry_price_b = None
+            entry_z_threshold = 1.5  # RELAXED
 
             for i in range(window, len(df_bt)):
                 y = df_bt['NIFTY_Close'].iloc[i-window:i].values
@@ -98,56 +92,46 @@ if nifty_file and bank_file:
                 trend = df_bt['Trend'].iloc[i]
                 time = df_bt.index[i]
 
-                long_sig = z < -entry_z_threshold and rsi < 35 and price < vwap and trend == 1
-                short_sig = z > entry_z_threshold and rsi > 65 and price > vwap and trend == -1
+                # === RELAXED ENTRY ===
+                long_sig = z < -entry_z_threshold and rsi < 40 and price < vwap and trend == 1
+                short_sig = z > entry_z_threshold and rsi > 60 and price > vwap and trend == -1
 
                 if position == 0:
                     if long_sig or short_sig:
                         position = 1 if long_sig else -1
-                        entry_idx = i
-                        entry_n.append(price)
-                        entry_b.append(df_bt['BANKNIFTY_Close'].iloc[i])
-                        entry_time.append(time)
-                        exit_n.append(np.nan)
-                        exit_b.append(np.nan)
-                        exit_time.append(np.nan)
-                        zs.append(z)
-                    else:
-                        entry_n.append(np.nan)
-                        entry_b.append(np.nan)
-                        entry_time.append(np.nan)
-                        exit_n.append(np.nan)
-                        exit_b.append(np.nan)
-                        exit_time.append(np.nan)
-                        zs.append(z)
+                        entry_bar = i
+                        entry_price_n = price
+                        entry_price_b = df_bt['BANKNIFTY_Close'].iloc[i]
                 else:
                     exit_price_n = price
                     exit_price_b = df_bt['BANKNIFTY_Close'].iloc[i]
                     revert = (position == 1 and z >= -0.5) or (position == -1 and z <= 0.5)
-                    timeout = (i - entry_idx) > 20
+                    timeout = (i - entry_bar) > 20
 
                     if revert or timeout:
                         n_qty = 25
                         b_qty = int(15 * abs(beta))
-                        if position == 1:
-                            pnl = (exit_price_n - entry_n[-1]) * n_qty - (exit_price_b - entry_b[-1]) * b_qty
-                        else:
-                            pnl = (entry_n[-1] - exit_price_n) * n_qty - (entry_b[-1] - exit_price_b) * b_qty
-                        pnl_list.append(pnl)
-                        exit_n[-1] = exit_price_n
-                        exit_b[-1] = exit_price_b
-                        exit_time[-1] = time
+                        pnl = (
+                            (exit_price_n - entry_price_n) * n_qty - (exit_price_b - entry_price_b) * b_qty
+                            if position == 1 else
+                            (entry_price_n - exit_price_n) * n_qty - (entry_price_b - exit_price_b) * b_qty
+                        )
+                        trades.append({
+                            "Entry Time": df_bt.index[entry_bar].strftime("%m-%d %H:%M"),
+                            "Exit Time": time.strftime("%m-%d %H:%M"),
+                            "Direction": "LONG NIFTY" if position == 1 else "SHORT NIFTY",
+                            "N In": f"₹{entry_price_n:,.0f}",
+                            "B In": f"₹{entry_price_b:,.0f}",
+                            "N Out": f"₹{exit_price_n:,.0f}",
+                            "B Out": f"₹{exit_price_b:,.0f}",
+                            "PnL": f"₹{pnl:,.0f}"
+                        })
                         position = 0
-                    else:
-                        exit_n.append(np.nan)
-                        exit_b.append(np.nan)
-                        exit_time.append(np.nan)
-                    zs.append(z)
 
             # === RESULTS ===
-            total_pnl = sum(pnl_list)
-            num_trades = len(pnl_list)
-            win_rate = sum(1 for p in pnl_list if p > 0) / num_trades * 100 if num_trades else 0
+            total_pnl = sum(float(t["PnL"].replace("₹", "").replace(",", "")) for t in trades)
+            num_trades = len(trades)
+            win_rate = sum(1 for t in trades if float(t["PnL"].replace("₹", "").replace(",", "")) > 0) / num_trades * 100 if num_trades else 0
 
             col1, col2, col3, col4 = st.columns(4)
             with col1: st.metric("Total PnL", f"₹{total_pnl:,.0f}")
@@ -155,33 +139,18 @@ if nifty_file and bank_file:
             with col3: st.metric("Win Rate", f"{win_rate:.1f}%")
             with col4: st.metric("Avg PnL", f"₹{total_pnl//num_trades:,.0f}" if num_trades else "₹0")
 
-            # === EQUITY CURVE ===
-            if num_trades:
-                equity = np.cumsum([0] + pnl_list)
+            if num_trades > 0:
+                equity = np.cumsum([0] + [float(t["PnL"].replace("₹", "").replace(",", "")) for t in trades])
                 fig, ax = plt.subplots(figsize=(10, 4))
                 ax.plot(equity, color='purple', linewidth=2)
                 ax.set_title(f"Equity Curve | Final: ₹{equity[-1]:,.0f}")
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
 
-                # === TRADE LOG ===
                 st.subheader("Trade Log")
-                log = []
-                for i in range(len(entry_n)):
-                    if not np.isnan(entry_n[i]) and not np.isnan(exit_n[i]):
-                        log.append({
-                            "Entry": pd.Timestamp(entry_time[i]).strftime("%m-%d %H:%M"),
-                            "N In": f"₹{entry_n[i]:,.0f}",
-                            "B In": f"₹{entry_b[i]:,.0f}",
-                            "Exit": pd.Timestamp(exit_time[i]).strftime("%m-%d %H:%M"),
-                            "N Out": f"₹{exit_n[i]:,.0f}",
-                            "B Out": f"₹{exit_b[i]:,.0f}",
-                            "PnL": f"₹{pnl_list[log.__len__()-1]:,.0f}"
-                        })
-                if log:
-                    df_log = pd.DataFrame(log)
-                    st.dataframe(df_log, use_container_width=True)
-                    st.download_button("Download", df_log.to_csv(index=False).encode(), "trades.csv", "text/csv")
+                df_trades = pd.DataFrame(trades)
+                st.dataframe(df_trades, use_container_width=True)
+                st.download_button("Download", df_trades.to_csv(index=False).encode(), "trades.csv", "text/csv")
 
     except Exception as e:
         st.error(f"Error: {str(e)}")
