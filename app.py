@@ -109,8 +109,8 @@ if nifty_file and bank_file:
                 vwap = df_bt['VWAP'].iloc[i]
                 trend = df_bt['Trend'].iloc[i]
 
-                long_signal = z < -entry_z and rsi < 20 and price < vwap and trend == 1
-                short_signal = z > entry_z and rsi > 80 and price > vwap and trend == -1
+                long_signal = z < -entry_z and rsi < 35 and price < vwap and trend == 1
+                short_signal = z > entry_z and rsi > 65 and price > vwap and trend == -1
 
                 if position == 0:
                     if long_signal:
