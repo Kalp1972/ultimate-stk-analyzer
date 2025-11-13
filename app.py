@@ -1,4 +1,4 @@
-# app.py - FINAL, Z-SCORE SAVED, 12 TRADES
+# app.py - FINAL, 12 TRADES, NO EXCUSES
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -39,32 +39,30 @@ if nifty_file and bank_file:
         df['VWAP'] = (np.cumsum(df['NIFTY_Close'] * df['NIFTY_Volume']) / np.cumsum(df['NIFTY_Volume'])).ffill()
         df['Trend'] = np.where(df['NIFTY_Close'] > df['VWAP'], 1, -1)
 
-        # === CALCULATE Z-SCORE FOR ENTIRE SERIES ===
+        # === CALCULATE Z-SCORE FOR ALL BARS ===
         window = 50
         z_scores = []
         betas = []
 
-        for i in range(window, len(df)):
+        for i in range(len(df)):
+            if i < window:
+                z_scores.append(0.0)
+                betas.append(0.44)
+                continue
             y = df['NIFTY_Close'].iloc[i-window:i].values
             x = df['BANKNIFTY_Close'].iloc[i-window:i].values
-
             if len(np.unique(x)) <= 1:
-                z = 0.0
-                beta = 0.44
-            else:
-                slope, _, _, _, _ = stats.linregress(x, y)
-                beta = slope
-                spread = y[-1] - beta * x[-1]
-                mu = np.mean(y - beta * x)
-                sigma = np.std(y - beta * x) or 1e-6
-                z = (spread - mu) / sigma
-
+                z_scores.append(0.0)
+                betas.append(0.44)
+                continue
+            slope, _, _, _, _ = stats.linregress(x, y)
+            beta = slope
+            spread = y[-1] - beta * x[-1]
+            mu = np.mean(y - beta * x)
+            sigma = np.std(y - beta * x) or 1e-6
+            z = (spread - mu) / sigma
             z_scores.append(z)
             betas.append(beta)
-
-        # Pad front
-        z_scores = [0.0] * window + z_scores
-        betas = [0.44] * window + betas
 
         df['z_score'] = z_scores
         df['beta'] = betas
@@ -90,7 +88,6 @@ if nifty_file and bank_file:
         if st.checkbox("Run Full Backtest", value=False):
             st.subheader("Backtest Results")
 
-            df_bt = df.copy()
             trades = []
             position = 0
             entry_bar = None
@@ -98,14 +95,14 @@ if nifty_file and bank_file:
             entry_time = None
             entry_z_threshold = 1.5
 
-            for i in range(window, len(df_bt)):
-                z = df_bt['z_score'].iloc[i]
-                rsi = df_bt['RSI_2'].iloc[i]
-                price = df_bt['NIFTY_Close'].iloc[i]
-                vwap = df_bt['VWAP'].iloc[i]
-                trend = df_bt['Trend'].iloc[i]
-                beta = df_bt['beta'].iloc[i]
-                time = df_bt.index[i]
+            for i in range(window, len(df)):
+                z = df['z_score'].iloc[i]
+                rsi = df['RSI_2'].iloc[i]
+                price = df['NIFTY_Close'].iloc[i]
+                vwap = df['VWAP'].iloc[i]
+                trend = df['Trend'].iloc[i]
+                beta = df['beta'].iloc[i]
+                time = df.index[i]
 
                 long_sig = z < -entry_z_threshold and rsi < 40 and price < vwap and trend == 1
                 short_sig = z > entry_z_threshold and rsi > 60 and price > vwap and trend == -1
@@ -114,11 +111,11 @@ if nifty_file and bank_file:
                     position = 1 if long_sig else -1
                     entry_bar = i
                     entry_price_n = price
-                    entry_price_b = df_bt['BANKNIFTY_Close'].iloc[i]
+                    entry_price_b = df['BANKNIFTY_Close'].iloc[i]
                     entry_time = time
                 elif position != 0:
                     exit_price_n = price
-                    exit_price_b = df_bt['BANKNIFTY_Close'].iloc[i]
+                    exit_price_b = df['BANKNIFTY_Close'].iloc[i]
                     revert = (position == 1 and z >= -0.5) or (position == -1 and z <= 0.5)
                     timeout = (i - entry_bar) > 20
 
