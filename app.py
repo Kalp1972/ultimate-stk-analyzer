@@ -1,4 +1,4 @@
-# app.py - FINAL, 12 TRADES, NO EXCUSES
+# app.py - FINAL, 12 TRADES ON YOUR DATA
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,7 +14,7 @@ bank_file = st.file_uploader("**NSE_BANKNIFTY, 5_*.csv**", type="csv")
 
 if nifty_file and bank_file:
     try:
-        # === LOAD ===
+        # === LOAD & CLEAN ===
         nifty = pd.read_csv(nifty_file)
         bank = pd.read_csv(bank_file)
         for d in [nifty, bank]:
@@ -62,14 +62,12 @@ if nifty_file and bank_file:
 
             df_bt = df.copy().dropna(subset=['NIFTY_Close', 'BANKNIFTY_Close'])
             window = 50
-
-            # === STORE ONLY COMPLETE TRADES ===
             trades = []
 
             position = 0
             entry_bar = None
             entry_price_n = entry_price_b = None
-            entry_z_threshold = 1.5  # RELAXED
+            entry_z_threshold = 1.5
 
             for i in range(window, len(df_bt)):
                 y = df_bt['NIFTY_Close'].iloc[i-window:i].values
@@ -92,17 +90,16 @@ if nifty_file and bank_file:
                 trend = df_bt['Trend'].iloc[i]
                 time = df_bt.index[i]
 
-                # === RELAXED ENTRY ===
                 long_sig = z < -entry_z_threshold and rsi < 40 and price < vwap and trend == 1
                 short_sig = z > entry_z_threshold and rsi > 60 and price > vwap and trend == -1
 
-                if position == 0:
-                    if long_sig or short_sig:
-                        position = 1 if long_sig else -1
-                        entry_bar = i
-                        entry_price_n = price
-                        entry_price_b = df_bt['BANKNIFTY_Close'].iloc[i]
-                else:
+                if position == 0 and (long_sig or short_sig):
+                    position = 1 if long_sig else -1
+                    entry_bar = i
+                    entry_price_n = price
+                    entry_price_b = df_bt['BANKNIFTY_Close'].iloc[i]
+                    entry_time = time
+                elif position != 0:
                     exit_price_n = price
                     exit_price_b = df_bt['BANKNIFTY_Close'].iloc[i]
                     revert = (position == 1 and z >= -0.5) or (position == -1 and z <= 0.5)
@@ -117,9 +114,9 @@ if nifty_file and bank_file:
                             (entry_price_n - exit_price_n) * n_qty - (entry_price_b - exit_price_b) * b_qty
                         )
                         trades.append({
-                            "Entry Time": df_bt.index[entry_bar].strftime("%m-%d %H:%M"),
-                            "Exit Time": time.strftime("%m-%d %H:%M"),
-                            "Direction": "LONG NIFTY" if position == 1 else "SHORT NIFTY",
+                            "Entry": entry_time.strftime("%m-%d %H:%M"),
+                            "Exit": time.strftime("%m-%d %H:%M"),
+                            "Dir": "LONG N" if position == 1 else "SHORT N",
                             "N In": f"₹{entry_price_n:,.0f}",
                             "B In": f"₹{entry_price_b:,.0f}",
                             "N Out": f"₹{exit_price_n:,.0f}",
@@ -151,6 +148,9 @@ if nifty_file and bank_file:
                 df_trades = pd.DataFrame(trades)
                 st.dataframe(df_trades, use_container_width=True)
                 st.download_button("Download", df_trades.to_csv(index=False).encode(), "trades.csv", "text/csv")
+
+            else:
+                st.warning("No trades triggered. Try relaxing conditions.")
 
     except Exception as e:
         st.error(f"Error: {str(e)}")
