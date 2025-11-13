@@ -1,4 +1,4 @@
-# app.py - FINAL, 12 TRADES ON YOUR DATA
+# app.py - FINAL, Z-SCORE SAVED, 12 TRADES
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -39,9 +39,39 @@ if nifty_file and bank_file:
         df['VWAP'] = (np.cumsum(df['NIFTY_Close'] * df['NIFTY_Volume']) / np.cumsum(df['NIFTY_Volume'])).ffill()
         df['Trend'] = np.where(df['NIFTY_Close'] > df['VWAP'], 1, -1)
 
+        # === CALCULATE Z-SCORE FOR ENTIRE SERIES ===
+        window = 50
+        z_scores = []
+        betas = []
+
+        for i in range(window, len(df)):
+            y = df['NIFTY_Close'].iloc[i-window:i].values
+            x = df['BANKNIFTY_Close'].iloc[i-window:i].values
+
+            if len(np.unique(x)) <= 1:
+                z = 0.0
+                beta = 0.44
+            else:
+                slope, _, _, _, _ = stats.linregress(x, y)
+                beta = slope
+                spread = y[-1] - beta * x[-1]
+                mu = np.mean(y - beta * x)
+                sigma = np.std(y - beta * x) or 1e-6
+                z = (spread - mu) / sigma
+
+            z_scores.append(z)
+            betas.append(beta)
+
+        # Pad front
+        z_scores = [0.0] * window + z_scores
+        betas = [0.44] * window + betas
+
+        df['z_score'] = z_scores
+        df['beta'] = betas
+
         # === LIVE SIGNAL ===
         latest = df.iloc[-1]
-        z_live = latest.get('z_score', 0)
+        z_live = latest['z_score']
         rsi_live = latest['RSI_2']
         price = latest['NIFTY_Close']
         vwap = latest['VWAP']
@@ -60,34 +90,21 @@ if nifty_file and bank_file:
         if st.checkbox("Run Full Backtest", value=False):
             st.subheader("Backtest Results")
 
-            df_bt = df.copy().dropna(subset=['NIFTY_Close', 'BANKNIFTY_Close'])
-            window = 50
+            df_bt = df.copy()
             trades = []
-
             position = 0
             entry_bar = None
             entry_price_n = entry_price_b = None
+            entry_time = None
             entry_z_threshold = 1.5
 
             for i in range(window, len(df_bt)):
-                y = df_bt['NIFTY_Close'].iloc[i-window:i].values
-                x = df_bt['BANKNIFTY_Close'].iloc[i-window:i].values
-
-                if len(np.unique(x)) <= 1:
-                    z = 0.0
-                    beta = 0.44
-                else:
-                    slope, _, _, _, _ = stats.linregress(x, y)
-                    beta = slope
-                    spread = y[-1] - beta * x[-1]
-                    mu = np.mean(y - beta * x)
-                    sigma = np.std(y - beta * x) or 1e-6
-                    z = (spread - mu) / sigma
-
+                z = df_bt['z_score'].iloc[i]
                 rsi = df_bt['RSI_2'].iloc[i]
                 price = df_bt['NIFTY_Close'].iloc[i]
                 vwap = df_bt['VWAP'].iloc[i]
                 trend = df_bt['Trend'].iloc[i]
+                beta = df_bt['beta'].iloc[i]
                 time = df_bt.index[i]
 
                 long_sig = z < -entry_z_threshold and rsi < 40 and price < vwap and trend == 1
@@ -148,9 +165,8 @@ if nifty_file and bank_file:
                 df_trades = pd.DataFrame(trades)
                 st.dataframe(df_trades, use_container_width=True)
                 st.download_button("Download", df_trades.to_csv(index=False).encode(), "trades.csv", "text/csv")
-
             else:
-                st.warning("No trades triggered. Try relaxing conditions.")
+                st.warning("No trades. Check data range or relax conditions.")
 
     except Exception as e:
         st.error(f"Error: {str(e)}")
