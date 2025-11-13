@@ -150,12 +150,24 @@ if nifty_file and bank_file:
             plt.tight_layout()
             st.pyplot(fig)
 
-        # Export
+       # === EXPORT ===
         result_df = pd.DataFrame([{
-            "Time": datetime.now().strftime("%H:%M"),
-            "z_score": round(z, 2), "Signal": reason, "Trade": trade.replace("\n", " | ")
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "z_score": round(z, 2),
+            "Signal": reason,
+            "Trade": trade.replace("\n", " | ")
         }])
-        st.download_button("Export", result_df.to_csv(index=False).encode(), "signal.csv", "text/csv")
+        st.download_button(
+            label="Export Signal",
+            data=result_df.to_csv(index=False).encode(),
+            file_name="quant_signal.csv",
+            mime="text/csv"
+        )
+
+        st.success("Analysis Complete!")
 
     except Exception as e:
-        st...
+        st.error(f"Error: {str(e)}")
+        st.info("Ensure both CSVs have matching DateTime and correct columns.")
+else:
+    st.info("Upload both `NIFTY_data.csv` and `BANKNIFTY_data.csv` to start.")
