@@ -83,8 +83,8 @@ if nifty_file and bank_file:
             pnl = []
 
             position = 0
-            entry_idx = 0
-            entry_z = 1.5
+            entry_idx = None
+            entry_z = 1.8
 
             for i in range(window, len(df_bt)):
                 idx = i - window  # index in output arrays
