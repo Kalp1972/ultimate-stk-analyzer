@@ -181,7 +181,7 @@ if nifty_file and bank_file:
 
                 for i in range(len(df_bt)):
                     row = df_bt.iloc[i]
-                    if position == 0 and not np.isnan(row['entry_n'):
+                    if position == 0 and not np.isnan(row['entry_n']):
                         entry_time = row.name
                         entry_n = row['entry_n']
                         entry_b = row['entry_b']
