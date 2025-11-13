@@ -1,36 +1,30 @@
-# app.py - FINAL, ROBUST, NO LENGTH MISMATCH
+# app.py - FINAL, WITH REAL TRADES
 import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
-import traceback
 
 st.set_page_config(page_title="NIFTY vs BANKNIFTY Stat Arb", layout="wide")
-
 st.title("NIFTY vs BANKNIFTY Statistical Arbitrage")
-st.markdown("**5-min CSVs → Live Signal + Backtest + Trade Log**")
+st.markdown("**5-min CSVs → Live Signal + Real Backtest + Trade Log**")
 
 nifty_file = st.file_uploader("Upload **NSE_NIFTY, 5_*.csv**", type="csv")
 bank_file = st.file_uploader("Upload **NSE_BANKNIFTY, 5_*.csv**", type="csv")
 
 if nifty_file and bank_file:
     try:
-        # === LOAD & CLEAN ===
+        # === LOAD DATA ===
         nifty = pd.read_csv(nifty_file)
         bank = pd.read_csv(bank_file)
-
         for df_temp in [nifty, bank]:
             df_temp.columns = df_temp.columns.str.strip()
 
         nifty['DateTime'] = pd.to_datetime(nifty['Date'] + ' ' + nifty['Time'], errors='coerce')
         bank['DateTime'] = pd.to_datetime(bank['Date'] + ' ' + bank['Time'], errors='coerce')
 
-        nifty = nifty.dropna(subset=['DateTime']).set_index('DateTime')
-        bank = bank.dropna(subset=['DateTime']).set_index('DateTime')
-
-        nifty = nifty.resample('5min').last().ffill()
-        bank = bank.resample('5min').last().ffill()
+        nifty = nifty.dropna(subset=['DateTime']).set_index('DateTime').resample('5min').last().ffill()
+        bank = bank.dropna(subset=['DateTime']).set_index('DateTime').resample('5min').last().ffill()
 
         df = pd.concat([nifty.add_prefix('NIFTY_'), bank.add_prefix('BANKNIFTY_')], axis=1).dropna()
 
@@ -39,32 +33,31 @@ if nifty_file and bank_file:
         gain = delta.clip(lower=0).rolling(2).mean()
         loss = (-delta.clip(upper=0)).rolling(2).mean()
         rs = gain / loss.replace(0, np.nan)
-        df['RSI_2'] = 100 - (100 / (1 + rs))
-        df['RSI_2'] = df['RSI_2'].fillna(50)
+        df['RSI_2'] = 100 - (100 / (1 + rs)).fillna(50)
 
         df['VWAP'] = (np.cumsum(df['NIFTY_Close'] * df['NIFTY_Volume']) / np.cumsum(df['NIFTY_Volume'])).ffill()
         df['Trend'] = np.where(df['NIFTY_Close'] > df['VWAP'], 1, -1)
 
         # === LIVE SIGNAL ===
         latest = df.iloc[-1]
-        z = latest.get('z_score', 0)
-        rsi = latest['RSI_2']
+        z_live = latest.get('z_score', 0)
+        rsi_live = latest['RSI_2']
         price = latest['NIFTY_Close']
         vwap = latest['VWAP']
         trend = latest['Trend']
 
         signal = "HOLD"
         reason = "No edge"
-        if z < -1.5 and rsi < 20 and price < vwap and trend == 1:
+        if z_live < -1.8 and rsi_live < 35 and price < vwap and trend == 1:
             signal = "LONG NIFTY / SHORT BANKNIFTY"
-            reason = "z oversold + RSI + below VWAP + uptrend"
-        elif z > 1.5 and rsi > 80 and price > vwap and trend == -1:
+            reason = "z oversold + RSI low + below VWAP + uptrend"
+        elif z_live > 1.8 and rsi_live > 65 and price > vwap and trend == -1:
             signal = "SHORT NIFTY / LONG BANKNIFTY"
-            reason = "z overbought + RSI + above VWAP + downtrend"
+            reason = "z overbought + RSI high + above VWAP + downtrend"
 
         st.success(f"**{signal}**")
         st.write(f"**Reason:** {reason}")
-        st.write(f"**z:** `{z:+.2f}` | **RSI(2):** `{rsi:.1f}` | **VWAP:** `₹{vwap:,.0f}`")
+        st.write(f"**z:** `{z_live:+.2f}` | **RSI(2):** `{rsi_live:.1f}` | **VWAP:** `₹{vwap:,.0f}`")
 
         # === BACKTEST ===
         if st.checkbox("Run Full Backtest", value=False):
@@ -74,26 +67,26 @@ if nifty_file and bank_file:
             window = 50
             n_rows = len(df_bt) - window
 
-            # === PRE-ALLOCATE LISTS WITH CORRECT LENGTH ===
+            # Pre-allocate
             zs = [0.0] * n_rows
             entry_price_n = [np.nan] * n_rows
             entry_price_b = [np.nan] * n_rows
             exit_price_n = [np.nan] * n_rows
             exit_price_b = [np.nan] * n_rows
-            pnl = []
+            entry_times = [None] * n_rows
+            exit_times = [None] * n_rows
 
+            pnl = []
             position = 0
             entry_idx = None
             entry_z = 1.8
 
             for i in range(window, len(df_bt)):
-                idx = i - window  # index in output arrays
-
+                idx = i - window
                 y = df_bt['NIFTY_Close'].iloc[i-window:i].values
                 x = df_bt['BANKNIFTY_Close'].iloc[i-window:i].values
 
-                # === SAFE REGRESSION ===
-                if len(np.unique(x)) <= 1 or len(np.unique(y)) <= 1:
+                if len(np.unique(x)) <= 1:
                     beta = 0.44
                     z = 0.0
                 else:
@@ -113,37 +106,33 @@ if nifty_file and bank_file:
                 short_signal = z > entry_z and rsi > 65 and price > vwap and trend == -1
 
                 if position == 0:
-                    if long_signal:
-                        position = 1
-                        entry_idx = i
+                    if long_signal or short_signal:
+                        position = 1 if long_signal else -1
+                        entry_idx = idx
                         entry_price_n[idx] = price
                         entry_price_b[idx] = df_bt['BANKNIFTY_Close'].iloc[i]
-                    elif short_signal:
-                        position = -1
-                        entry_idx = i
-                        entry_price_n[idx] = price
-                        entry_price_b[idx] = df_bt['BANKNIFTY_Close'].iloc[i]
+                        entry_times[idx] = df_bt.index[i]
                 else:
                     exit_n = price
                     exit_b = df_bt['BANKNIFTY_Close'].iloc[i]
-                    if (position == 1 and z >= -0.5) or (position == -1 and z <= 0.5) or (i - entry_idx > 20):
+                    if (position == 1 and z >= -0.5) or (position == -1 and z <= 0.5) or (i - (entry_idx + window) > 20):
                         n_qty = 25
                         b_qty = int(15 * abs(beta))
                         trade_pnl = (
-                            (exit_n - entry_price_n[idx]) * n_qty - (exit_b - entry_price_b[idx]) * b_qty
+                            (exit_n - entry_price_n[entry_idx]) * n_qty - (exit_b - entry_price_b[entry_idx]) * b_qty
                             if position == 1 else
-                            (entry_price_n[idx] - exit_n) * n_qty - (entry_price_b[idx] - exit_b) * b_qty
+                            (entry_price_n[entry_idx] - exit_n) * n_qty - (entry_price_b[entry_idx] - exit_b) * b_qty
                         )
                         pnl.append(trade_pnl)
-                        position = 0
                         exit_price_n[idx] = exit_n
                         exit_price_b[idx] = exit_b
+                        exit_times[idx] = df_bt.index[i]
+                        position = 0
+                        entry_idx = None
 
                 zs[idx] = z
 
-            # === ASSIGN TO DATAFRAME (SAME LENGTH) ===
-            df_bt = df_bt.iloc[window:].copy()
-            df_bt = df_bt.iloc[:n_rows]  # Ensure exact length
+            df_bt = df_bt.iloc[window:window + n_rows].copy()
             df_bt['z_score'] = zs
             df_bt['entry_n'] = entry_price_n
             df_bt['entry_b'] = entry_price_b
@@ -161,62 +150,45 @@ if nifty_file and bank_file:
             with col3: st.metric("Win Rate", f"{win_rate:.1f}%")
             with col4: st.metric("Avg PnL", f"₹{avg_pnl:,.0f}")
 
-            equity = np.cumsum([0] + pnl)
-            fig, ax = plt.subplots(figsize=(10, 4))
-            ax.plot(equity, color='purple', linewidth=2)
-            ax.set_title(f"Equity Curve | Final: ₹{equity[-1]:,.0f}")
-            ax.set_ylabel("PnL (₹)")
-            ax.grid(True, alpha=0.3)
-            st.pyplot(fig)
-
-            # === TRADE LOG ===
             if num_trades > 0:
-                st.subheader("Trade Details")
-                trade_details = []
-                trade_idx = 0
-                entry_time = entry_n = entry_b = entry_z_val = beta_val = direction = None
+                equity = np.cumsum([0] + pnl)
+                fig, ax = plt.subplots(figsize=(10, 4))
+                ax.plot(equity, color='purple', linewidth=2)
+                ax.set_title(f"Equity Curve | Final: ₹{equity[-1]:,.0f}")
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
 
+                st.subheader("Trade Details")
+                trade_log = []
+                trade_no = 0
                 for i in range(len(df_bt)):
-                    row = df_bt.iloc[i]
-                    if not np.isnan(row['entry_n']):
-                        entry_time = row.name
-                        entry_n = row['entry_n']
-                        entry_b = row['entry_b']
-                        entry_z_val = row['z_score']
-                        direction = "LONG NIFTY / SHORT BNF" if row['z_score'] < -entry_z else "SHORT NIFTY / LONG BNF"
-                        beta_val = row['NIFTY_Close'] / row['BANKNIFTY_Close']
-                    if not np.isnan(row['exit_n']):
-                        exit_time = row.name
-                        exit_n = row['exit_n']
-                        exit_b = row['exit_b']
-                        n_qty = 25
-                        b_qty = int(15 * abs(beta_val))
-                        trade_pnl = (
-                            (exit_n - entry_n) * n_qty - (exit_b - entry_b) * b_qty
-                            if "LONG" in direction else
-                            (entry_n - exit_n) * n_qty - (entry_b - exit_b) * b_qty
-                        )
-                        trade_details.append({
-                            "Trade": trade_idx + 1,
+                    if not np.isnan(df_bt['entry_n'].iloc[i]) and entry_idx is not None and entry_idx == i:
+                        entry_time = df_bt.index[i]
+                        entry_n = df_bt['entry_n'].iloc[i]
+                        entry_b = df_bt['entry_b'].iloc[i]
+                        entry_z = df_bt['z_score'].iloc[i]
+                    if not np.isnan(df_bt['exit_n'].iloc[i]):
+                        exit_time = df_bt.index[i]
+                        exit_n = df_bt['exit_n'].iloc[i]
+                        exit_b = df_bt['exit_b'].iloc[i]
+                        trade_no += 1
+                        trade_log.append({
+                            "Trade": trade_no,
                             "Entry": entry_time.strftime("%m-%d %H:%M"),
                             "Exit": exit_time.strftime("%m-%d %H:%M"),
-                            "Dir": direction.split()[0],
                             "N In": f"₹{entry_n:,.0f}",
                             "B In": f"₹{entry_b:,.0f}",
                             "N Out": f"₹{exit_n:,.0f}",
                             "B Out": f"₹{exit_b:,.0f}",
-                            "z": f"{entry_z_val:+.2f}",
-                            "PnL": f"₹{trade_pnl:,.0f}"
+                            "z": f"{entry_z:+.2f}",
+                            "PnL": f"₹{pnl[trade_no-1]:,.0f}"
                         })
-                        trade_idx += 1
 
-                if trade_details:
-                    trade_df = pd.DataFrame(trade_details)
-                    st.dataframe(trade_df, use_container_width=True)
-                    st.download_button("Download Log", trade_df.to_csv(index=False).encode(), "trades.csv")
+                if trade_log:
+                    st.dataframe(pd.DataFrame(trade_log), use_container_width=True)
+                    st.download_button("Download", pd.DataFrame(trade_log).to_csv(index=False).encode(), "trades.csv")
 
     except Exception as e:
         st.error(f"Error: {str(e)[:300]}")
-        st.code(traceback.format_exc()[:1000])
 else:
-    st.info("Upload **NIFTY** and **BANKNIFTY** 5-min CSVs to start.")
+    st.info("Upload both CSVs.")
