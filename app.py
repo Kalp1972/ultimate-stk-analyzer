@@ -1,4 +1,4 @@
-# app.py - FINAL, 12 TRADES, FIXED ENTRY_BAR
+# app.py - FINAL, 12 TRADES, ALL VARIABLES RESET
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -137,8 +137,12 @@ if nifty_file and bank_file:
                             "B Out": f"₹{exit_price_b:,.0f}",
                             "PnL": f"₹{pnl:,.0f}"
                         })
+                        # === FULL RESET ===
                         position = 0
-                        entry_bar = None  # ← THIS FIXES IT
+                        entry_bar = None
+                        entry_price_n = None
+                        entry_price_b = None
+                        entry_time = None
 
             # === RESULTS ===
             total_pnl = sum(float(t["PnL"].replace("₹", "").replace(",", "")) for t in trades)
