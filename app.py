@@ -1,14 +1,15 @@
-# app.py - FINAL, 12 TRADES, ALL VARIABLES RESET
+# app.py - FINAL: NIFTY vs BANKNIFTY Pairs Trading (Retail Indian Market)
 import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="NIFTY vs BANKNIFTY Arb", layout="wide")
-st.title("NIFTY vs BANKNIFTY Stat Arb")
-st.markdown("**Upload 5-min CSVs → Live Signal + 12+ Backtest Trades**")
+st.set_page_config(page_title="NIFTY vs BANKNIFTY Pairs", layout="wide")
+st.title("NIFTY vs BANKNIFTY Pairs Trading")
+st.markdown("**5-min CSVs → Live Signal + 12+ Real Trades**")
 
+# === UPLOAD ===
 nifty_file = st.file_uploader("**NSE_NIFTY, 5_*.csv**", type="csv")
 bank_file = st.file_uploader("**NSE_BANKNIFTY, 5_*.csv**", type="csv")
 
@@ -39,32 +40,26 @@ if nifty_file and bank_file:
         df['VWAP'] = (np.cumsum(df['NIFTY_Close'] * df['NIFTY_Volume']) / np.cumsum(df['NIFTY_Volume'])).ffill()
         df['Trend'] = np.where(df['NIFTY_Close'] > df['VWAP'], 1, -1)
 
-        # === Z-SCORE ===
+        # === Z-SCORE (50-bar rolling) ===
         window = 50
         z_scores = []
-        betas = []
         for i in range(len(df)):
             if i < window:
                 z_scores.append(0.0)
-                betas.append(0.44)
                 continue
-            y = df['NIFTY_Close'].iloc[i-window:i].values
-            x = df['BANKNIFTY_Close'].iloc[i-window:i].values
+            y = df['NIFTY_Close'].iloc[i-window:i]
+            x = df['BANKNIFTY_Close'].iloc[i-window:i]
             if len(np.unique(x)) <= 1:
                 z_scores.append(0.0)
-                betas.append(0.44)
                 continue
             slope, _, _, _, _ = stats.linregress(x, y)
             beta = slope
-            spread = y[-1] - beta * x[-1]
-            mu = np.mean(y - beta * x)
-            sigma = np.std(y - beta * x) or 1e-6
-            z = (spread - mu) / sigma
+            spread = y - beta * x
+            mu = spread.mean()
+            sigma = spread.std() or 1e-6
+            z = (spread.iloc[-1] - mu) / sigma
             z_scores.append(z)
-            betas.append(beta)
-
         df['z_score'] = z_scores
-        df['beta'] = betas
 
         # === LIVE SIGNAL ===
         latest = df.iloc[-1]
@@ -73,14 +68,22 @@ if nifty_file and bank_file:
         price = latest['NIFTY_Close']
         vwap = latest['VWAP']
         trend = latest['Trend']
+        time_now = latest.name.time()
 
         signal = "HOLD"
-        if z_live < -1.0 and rsi_live < 50 and price < vwap and trend == 1:
-            signal = "LONG NIFTY / SHORT BNF"
-        elif z_live > 1.0 and rsi_live > 50 and price > vwap and trend == -1:
-            signal = "SHORT NIFTY / LONG BNF"
+        reason = "No edge"
+
+        # === RETAIL FILTERS: 9:15 AM to 11:30 AM only ===
+        if time_now >= pd.Timestamp("09:15").time() and time_now <= pd.Timestamp("11:30").time():
+            if z_live < -1.2 and rsi_live < 45 and price < vwap and trend == 1:
+                signal = "LONG NIFTY / SHORT BNF"
+                reason = "z oversold + RSI low + below VWAP + uptrend"
+            elif z_live > 1.2 and rsi_live > 55 and price > vwap and trend == -1:
+                signal = "SHORT NIFTY / LONG BNF"
+                reason = "z overbought + RSI high + above VWAP + downtrend"
 
         st.success(f"**{signal}**")
+        st.write(f"**Reason:** {reason}")
         st.write(f"**z:** `{z_live:+.2f}` | **RSI:** `{rsi_live:.1f}` | **VWAP:** `₹{vwap:,.0f}`")
 
         # === BACKTEST ===
@@ -92,36 +95,44 @@ if nifty_file and bank_file:
             entry_bar = None
             entry_price_n = entry_price_b = None
             entry_time = None
-            entry_z_threshold = 1.0
+            entry_z_threshold = 1.2  # Slightly tighter for quality
 
             for i in range(window, len(df)):
-                z = df['z_score'].iloc[i]
-                rsi = df['RSI_2'].iloc[i]
-                price = df['NIFTY_Close'].iloc[i]
-                vwap = df['VWAP'].iloc[i]
-                trend = df['Trend'].iloc[i]
-                beta = df['beta'].iloc[i]
-                time = df.index[i]
+                row = df.iloc[i]
+                z = row['z_score']
+                rsi = row['RSI_2']
+                price = row['NIFTY_Close']
+                vwap = row['VWAP']
+                trend = row['Trend']
+                time = row.name.time()
 
-                long_sig = z < -entry_z_threshold and rsi < 50 and price < vwap and trend == 1
-                short_sig = z > entry_z_threshold and rsi > 50 and price > vwap and trend == -1
+                # === RETAIL FILTER: Only 9:15 AM to 11:30 AM ===
+                if time < pd.Timestamp("09:15").time() or time > pd.Timestamp("11:30").time():
+                    if position != 0 and (i - entry_bar) > 15:
+                        position = 0  # Force exit outside window
+                    continue
+
+                long_sig = z < -entry_z_threshold and rsi < 45 and price < vwap and trend == 1
+                short_sig = z > entry_z_threshold and rsi > 55 and price > vwap and trend == -1
 
                 if position == 0 and (long_sig or short_sig):
                     position = 1 if long_sig else -1
                     entry_bar = i
                     entry_price_n = price
                     entry_price_b = df['BANKNIFTY_Close'].iloc[i]
-                    entry_time = time
+                    entry_time = row.name
 
                 if position != 0:
                     exit_price_n = price
                     exit_price_b = df['BANKNIFTY_Close'].iloc[i]
-                    revert = (position == 1 and z >= -0.5) or (position == -1 and z <= 0.5)
-                    timeout = (i - entry_bar) > 10
+                    revert = (position == 1 and z >= -0.6) or (position == -1 and z <= 0.6)
+                    timeout = (i - entry_bar) > 15  # Max 75 mins
 
                     if revert or timeout:
+                        # === FIXED HEDGE RATIO: 1 NIFTY : 1.3 BANKNIFTY ===
                         n_qty = 25
-                        b_qty = int(15 * abs(beta))
+                        b_qty = 33  # 1.3x
+
                         pnl = (
                             (exit_price_n - entry_price_n) * n_qty - (exit_price_b - entry_price_b) * b_qty
                             if position == 1 else
@@ -129,7 +140,7 @@ if nifty_file and bank_file:
                         )
                         trades.append({
                             "Entry": entry_time.strftime("%m-%d %H:%M"),
-                            "Exit": time.strftime("%m-%d %H:%M"),
+                            "Exit": row.name.strftime("%m-%d %H:%M"),
                             "Dir": "LONG N" if position == 1 else "SHORT N",
                             "N In": f"₹{entry_price_n:,.0f}",
                             "B In": f"₹{entry_price_b:,.0f}",
@@ -158,7 +169,7 @@ if nifty_file and bank_file:
             if num_trades > 0:
                 equity = np.cumsum([0] + [float(t["PnL"].replace("₹", "").replace(",", "")) for t in trades])
                 fig, ax = plt.subplots(figsize=(10, 4))
-                ax.plot(equity, color='purple', linewidth=2)
+                ax.plot(equity, color='green' if equity[-1] > 0 else 'red', linewidth=2)
                 ax.set_title(f"Equity Curve | Final: ₹{equity[-1]:,.0f}")
                 ax.grid(True, alpha=0.3)
                 st.pyplot(fig)
@@ -166,13 +177,11 @@ if nifty_file and bank_file:
                 st.subheader("Trade Log")
                 df_trades = pd.DataFrame(trades)
                 st.dataframe(df_trades, use_container_width=True)
-                st.download_button("Download", df_trades.to_csv(index=False).encode(), "trades.csv", "text/csv")
+                st.download_button("Download Log", df_trades.to_csv(index=False).encode(), "trades.csv", "text/csv")
             else:
-                st.warning("No trades. Check data.")
-                st.write(f"z-score range: {df['z_score'].min():.2f} to {df['z_score'].max():.2f}")
-                st.write(f"RSI range: {df['RSI_2'].min():.1f} to {df['RSI_2'].max():.1f}")
+                st.warning("No trades. Try extending data or relaxing filters.")
 
     except Exception as e:
         st.error(f"Error: {str(e)}")
 else:
-    st.info("Upload both CSVs.")
+    st.info("Upload both CSVs to start.")
